@@ -6,6 +6,10 @@ import {
     getAllGames,
     getAllGameIds,
     getGameById,
+    getGames,
+    getAllCategories,
+    getAllPublishers,
+    type GameFilters,
 } from './games';
 
 async function seedGames(db: Database, count: number): Promise<void> {
@@ -62,5 +66,64 @@ describe('games data-access helpers', () => {
     it('returns null for a non-existent game', async () => {
         await seedGames(db, 2);
         expect(await getGameById(db, 99999)).toBeNull();
+    });
+});
+
+describe('game filtering helpers', () => {
+    let db: Database;
+    let strategyId: number;
+    let puzzleId: number;
+    let actionId: number;
+    let pubOneId: number;
+    let pubTwoId: number;
+
+    beforeEach(async () => {
+        db = await createTestDatabase();
+        const cats = await db
+            .insert(categories)
+            .values([{ name: 'Strategy' }, { name: 'Puzzle' }, { name: 'Action' }])
+            .returning({ id: categories.id });
+        [strategyId, puzzleId, actionId] = cats.map((c) => c.id);
+        const pubs = await db
+            .insert(publishers)
+            .values([{ name: 'Pub One' }, { name: 'Pub Two' }])
+            .returning({ id: publishers.id });
+        [pubOneId, pubTwoId] = pubs.map((p) => p.id);
+        await db.insert(games).values([
+            { title: 'A', description: 'a', categoryId: strategyId, publisherId: pubOneId },
+            { title: 'B', description: 'b', categoryId: puzzleId, publisherId: pubOneId },
+            { title: 'C', description: 'c', categoryId: puzzleId, publisherId: pubTwoId },
+            { title: 'D', description: 'd', categoryId: actionId, publisherId: pubTwoId },
+        ]);
+    });
+
+    const titles = async (filters?: GameFilters): Promise<string[]> =>
+        (await getGames(db, filters)).map((g) => g.title);
+
+    it('returns every game when no filters are given', async () => {
+        expect(await titles()).toEqual(['A', 'B', 'C', 'D']);
+        expect(await titles({ categoryIds: [] })).toEqual(['A', 'B', 'C', 'D']);
+    });
+
+    it('filters by a single category', async () => {
+        expect(await titles({ categoryIds: [puzzleId] })).toEqual(['B', 'C']);
+    });
+
+    it('filters by multiple categories (any match)', async () => {
+        expect(await titles({ categoryIds: [strategyId, actionId] })).toEqual(['A', 'D']);
+    });
+
+    it('filters by publisher', async () => {
+        expect(await titles({ publisherId: pubTwoId })).toEqual(['C', 'D']);
+    });
+
+    it('combines category and publisher filters', async () => {
+        expect(await titles({ categoryIds: [puzzleId], publisherId: pubTwoId })).toEqual(['C']);
+        expect(await titles({ categoryIds: [strategyId], publisherId: pubTwoId })).toEqual([]);
+    });
+
+    it('lists categories and publishers ordered by name', async () => {
+        expect((await getAllCategories(db)).map((c) => c.name)).toEqual(['Action', 'Puzzle', 'Strategy']);
+        expect((await getAllPublishers(db)).map((p) => p.name)).toEqual(['Pub One', 'Pub Two']);
     });
 });
